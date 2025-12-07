@@ -45,7 +45,7 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}
-          # optionally set platforms if you want: platforms: linux/amd64,linux/arm64
+
 
       - name: Output pushed image
         run: |
