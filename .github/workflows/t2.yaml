@@ -17,7 +17,7 @@ on:
       upload_dir:
         description: 'Directory to upload (relative to repo root)'
         required: false
-        default: './task1/custom/index.html'
+        default: './task1/custom/'
 
 jobs:
   provision-and-upload:
