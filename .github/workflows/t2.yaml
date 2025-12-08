@@ -1,0 +1,134 @@
+name: Conditional S3 Provision & Upload (Self-hosted EC2)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket:
+        description: 'S3 bucket name (must be globally unique)'
+        required: true
+      environment:
+        description: 'Environment (prod, dev, stage)'
+        required: true
+        default: 'dev'
+      region:
+        description: 'AWS region (default: us-east-1)'
+        required: false
+        default: 'us-east-1'
+      upload_dir:
+        description: 'Directory to upload (relative to repo root)'
+        required: false
+        default: './task1/custom/index.html'
+
+jobs:
+  provision-and-upload:
+    name: Provision S3 (self-hosted)
+    runs-on: [self-hosted, linux]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure awscli is available
+        run: |
+          set -euo pipefail
+          if command -v aws >/dev/null 2>&1; then
+            echo "aws CLI present: $(aws --version)"
+          else
+            echo "aws CLI not found — installing python3/pip and awscli..."
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y python3 python3-pip
+            elif command -v yum >/dev/null 2>&1; then
+              sudo yum install -y python3 python3-pip
+            fi
+            python3 -m pip install --upgrade awscli
+            echo "Installed aws CLI: $(aws --version)"
+          fi
+
+      - name: Provision bucket if missing, set versioning (inline)
+        env:
+          BUCKET: ${{ github.event.inputs.bucket }}
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          REGION: ${{ github.event.inputs.region }}
+          UPLOAD_DIR: ${{ github.event.inputs.upload_dir }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "=== S3 Provision & Upload ==="
+          echo "Bucket     : $BUCKET"
+          echo "Environment: $ENVIRONMENT"
+          echo "Region     : $REGION"
+          echo "Upload dir : $UPLOAD_DIR"
+          echo ""
+
+          # Helper: check if bucket exists and is accessible
+          echo "Checking if bucket exists..."
+          if aws s3api head-bucket --bucket "$BUCKET" 2>/tmp/headbucket.err; then
+            echo "Bucket '$BUCKET' exists and is reachable. Skipping create."
+            EXISTS=true
+          else
+            # read error to decide reason
+            ERR=$(cat /tmp/headbucket.err || true)
+            echo "head-bucket returned error:"
+            echo "$ERR"
+            # If it was a 404 (Not Found) or contains 'Not Found', create
+            # If 403 -> bucket exists but not accessible by this account (skip create but warn)
+            if echo "$ERR" | grep -qi '404\|Not Found'; then
+              EXISTS=false
+            elif echo "$ERR" | grep -qi '403\|Forbidden'; then
+              echo "Bucket exists but is not accessible (403). Will NOT attempt to create. Continuing to upload (may fail on put)."
+              EXISTS=true
+            else
+              # Unknown error — assume does not exist and attempt create
+              EXISTS=false
+            fi
+          fi
+
+          # Create bucket if not exists
+          if [ "${EXISTS}" = false ]; then
+            echo "Creating bucket: $BUCKET in region: $REGION"
+            if [ "$REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$BUCKET"
+            else
+              aws s3api create-bucket --bucket "$BUCKET" \
+                --create-bucket-configuration LocationConstraint="$REGION"
+            fi
+
+            echo "Waiting for bucket creation to propagate..."
+            sleep 3
+          fi
+
+          # If prod, enable versioning
+          if [[ "${ENVIRONMENT,,}" = "prod" || "${ENVIRONMENT,,}" = "production" ]]; then
+            echo "Enabling versioning on bucket: $BUCKET"
+            aws s3api put-bucket-versioning --bucket "$BUCKET" \
+              --versioning-configuration Status=Enabled || {
+                echo "Warning: unable to set versioning (check permissions/region). Continuing."
+              }
+          else
+            echo "Non-prod environment; skipping enabling versioning."
+          fi
+
+          # Verify upload dir exists in the repo
+          if [ ! -d "$UPLOAD_DIR" ]; then
+            echo "ERROR: Upload directory '$UPLOAD_DIR' not found in workspace. Available files:"
+            ls -la
+            exit 1
+          fi
+
+          echo "Starting upload of files from '$UPLOAD_DIR' to s3://$BUCKET/"
+          aws s3 cp "$UPLOAD_DIR" "s3://$BUCKET/" --recursive || {
+            echo "Upload failed. Dumping aws CLI error and exiting."
+            exit 1
+          }
+          echo "Upload completed successfully."
+
+      - name: Confirm uploaded objects (quick list)
+        env:
+          BUCKET: ${{ github.event.inputs.bucket }}
+        run: |
+          set -euo pipefail
+          echo "Listing first 50 objects (if any) in s3://$BUCKET/"
+          aws s3 ls "s3://$BUCKET/" --recursive | head -n 50 || echo "No objects listed or permission issue."
