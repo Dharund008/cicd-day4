@@ -32,20 +32,11 @@ jobs:
 
       - name: Ensure awscli is available
         run: |
-          set -euo pipefail
-          if command -v aws >/dev/null 2>&1; then
-            echo "aws CLI present: $(aws --version)"
-          else
-            echo "aws CLI not found — installing python3/pip and awscli..."
-            if command -v apt-get >/dev/null 2>&1; then
-              sudo apt-get update -y
-              sudo apt-get install -y python3 python3-pip
-            elif command -v yum >/dev/null 2>&1; then
-              sudo yum install -y python3 python3-pip
-            fi
-            python3 -m pip install --upgrade awscli
-            echo "Installed aws CLI: $(aws --version)"
-          fi
+          sudo apt-get update
+          sudo apt-get install -y unzip curl
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install --update
 
       - name: Provision bucket if missing, set versioning (inline)
         env:
