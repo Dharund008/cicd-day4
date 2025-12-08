@@ -39,8 +39,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
-          context: ./Task1
-          file: ./Task1/Dockerfile
+          context: ./task1
+          file: ./task1/Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
